@@ -1,4 +1,3 @@
-
 name: Build JARVIS APK
 
 on:
@@ -18,9 +17,6 @@ jobs:
       - name: Obter código
         uses: actions/checkout@v4
 
-      - name: Extrair projeto
-        run: unzip -q JARVIS-Business-v0.11.0.zip
-
       - name: Configurar Java
         uses: actions/setup-java@v4
         with:
@@ -32,11 +28,60 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-      - name: Compilar aplicação
-        run: gradle -p JARVIS-Android-v0.4.0 assembleDebug
+      - name: Extrair projeto
+        run: unzip -q -o JARVIS-Business-v0.11.0.zip
 
-      - name: Guardar APK
+      - name: Preparar assinatura
+        env:
+          JARVIS_KEYSTORE_BASE64: ${{ secrets.JARVIS_KEYSTORE_BASE64 }}
+        run: |
+          PROJECT_DIR="JARVIS-Android-v0.4.0"
+          mkdir -p "$PROJECT_DIR/app"
+
+          printf '%s' "$JARVIS_KEYSTORE_BASE64" | base64 --decode > "$PROJECT_DIR/app/jarvis-release-key.jks"
+
+          test -s "$PROJECT_DIR/app/jarvis-release-key.jks"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("JARVIS-Android-v0.4.0/app/build.gradle.kts")
+          s = p.read_text()
+
+          if 'create("release")' not in s:
+              s = s.replace(
+                  '    buildFeatures { compose = true }',
+                  '''
+              signingConfigs {
+                  create("release") {
+                      storeFile = file("jarvis-release-key.jks")
+                      storePassword = System.getenv("JARVIS_KEYSTORE_PASSWORD")
+                      keyAlias = System.getenv("JARVIS_KEY_ALIAS")
+                      keyPassword = System.getenv("JARVIS_KEY_PASSWORD")
+                  }
+              }
+              buildTypes {
+                  getByName("release") {
+                      signingConfig = signingConfigs.getByName("release")
+                  }
+              }
+              buildFeatures { compose = true }'''
+              )
+
+          p.write_text(s)
+          PY
+
+      - name: Compilar APK Release assinado
+        env:
+          JARVIS_KEYSTORE_PASSWORD: ${{ secrets.JARVIS_KEYSTORE_PASSWORD }}
+          JARVIS_KEY_ALIAS: ${{ secrets.JARVIS_KEY_ALIAS }}
+          JARVIS_KEY_PASSWORD: ${{ secrets.JARVIS_KEY_PASSWORD }}
+        run: gradle --no-daemon -p JARVIS-Android-v0.4.0 assembleRelease
+
+      - name: Guardar APK assinado
         uses: actions/upload-artifact@v4
         with:
-          name: JARVIS-APK
-          path: JARVIS-Android-v0.4.0/app/build/outputs/apk/debug/app-debug.apk
+          name: JARVIS-APK-Release
+          path: JARVIS-Android-v0.4.0/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
